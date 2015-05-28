@@ -4,10 +4,12 @@ Created on May 22, 2015
 @author: Spencer Lee
 '''
 
+import Message
 import User
 import socket
 import select
 import sys
+import Queue
 
 def serverInit(host, port):
     try:
@@ -31,7 +33,7 @@ class ClientFlags:
     CreateUser, LogIn, LogOut, Post, Sub, UnSub,  Sync = range(6)
     
 class ServerFlags:
-    LogResp, SubResp, Sync = range(3)
+    LogResp, SubResp, Post = range(3)
 
 class TwitServer(object):
 
@@ -40,71 +42,211 @@ class TwitServer(object):
         self.sock = serverInit(HOST, PORT)
         self.sock.listen(15)
         self.User_List = []
-        self.Active_Users = []
+        self.Connections = []
         self.Read_List = [self.sock]
+        self.Write_List = []
+        self.message_queues = {}
+        self.delimiter = '};{'
         
-    def serverResponse(self, conn, addr, context, response):
+    def serverFindUser(self, user):
+        userMatches = [x for x in self.User_List if x.username == user]
+        if not userMatches:
+            return None
+        else:
+            return userMatches[0]
+        
+    def serverCloseConnection(self, conn):
+        connMatches = [x for x in self.Connections if x[0] == conn]
+        for m in connMatches:
+            self.Connections.remove(m)
+        
+        if conn in self.Write_List:
+            self.Write_List.remove(conn)
+            
+        if conn in self.Read_List:
+            self.Read_List.remove(conn)
+            conn.close() 
+            
+        del self.message_queues[conn]
+        
+    def serverAddConnection(self, conn, addr):
+        connMatches = [x for x in self.Connections if x[0] == conn]
+        connTuple = (conn, addr, '')
+        if not connMatches:
+            self.Connections.append(connTuple)
+        else:
+            self.serverCloseConnection(conn)
+            self.Connections.append(connTuple)
+            
+        
+    def serverResponse(self, conn, context, response):
+        reply = ''
         if context == ClientFlags.LogIn or context == ClientFlags.LogOut or context == ClientFlags.CreateUser:
-            reply = str(ServerFlags.LogResp) + ':' + str(response)
-            conn.send(reply)
+            reply = str(ServerFlags.LogResp) + self.delimiter + str(response)
             
         elif context == ClientFlags.Sub or context == ClientFlags.UnSub:
-            reply = str(ServerFlags.SubResp) + ':' + str(response)
-            conn.send(reply)
+            reply = str(ServerFlags.SubResp) + self.delimiter + str(response)
             
         elif context == ClientFlags.Post:
             pass
         
         elif context == ClientFlags.Sync:
             pass
+        else:
+            return
         
-    def serverLogIn(self, conn, addr, logInString):
-        breakDown = logInString.split(":")
+        self.message_queues[conn].put(reply)
+        if conn not in self.Write_List:
+            self.Write_List.append(conn)
+            
+    def serverLogIn(self, conn, logInString):
+        breakDown = logInString.split(self.delimiter)
         userMatches = [x for x in self.User_List if x.username == breakDown[1]]
         if not userMatches:
-            self.serverResponse(conn, addr, ClientFlags.LogIn, 2)
+            self.serverResponse(conn, ClientFlags.LogIn, 2)
             return 2
         for m in userMatches:
             if breakDown[2] == m.password:
-                connTuple = (conn,addr,m)
-                self.Active_Users.append(connTuple)
-                self.serverResponse(conn, addr, ClientFlags.LogIn, 1)
+                connMatches = [x for x in self.Connections if x[0] == conn]
+                for c in connMatches:
+                    connTuple = (conn,c[1],m.username)
+                    self.Connections.remove(c)
+                    self.Connections.append(connTuple)
+                
+                self.serverResponse(conn, ClientFlags.LogIn, 1)
                 return 1
-        self.serverResponse(conn, addr, ClientFlags.LogIn, 3)
+        self.serverResponse(conn, ClientFlags.LogIn, 3)
         return 3
     
-    def serverLogOut(self, conn, addr, logOutString):
-        breakDown = logOutString.split(":")
-        addrMatches = [x for x in self.Active_User[1] == addr]
+    def serverLogOut(self, conn, logOutString):
+        breakDown = logOutString.split(self.delimiter)
+        addrMatches = [x for x in self.Connections if x[0] == conn and breakDown[1] == x[2]]
         for m in addrMatches:
-            if breakDown[1] == m[2].username:
-                self.serverResponse(conn, addr, ClientFlags.LogOut, 1)
-                self.Active_Users.remove(m)
-                conn.close()
+                self.serverResponse(conn, ClientFlags.LogOut, 1)
+                connTuple = (conn,m[1],'')
+                self.Connections.remove(m)
+                self.Connections.append(connTuple)
                 return 1
         return -1
                 
-    def serverCreateUser(self, conn, addr, createUserString):
-        breakDown = createUserString.split(":")
+    def serverCreateUser(self, conn, createUserString):
+        breakDown = createUserString.split(self.delimiter)
         userMatches= [x for x in self.User_List if x.username == breakDown[1]]
         if userMatches:
-            self.serverResponse(conn, addr, ClientFlags.LogOut, 2)
+            self.serverResponse(conn, ClientFlags.LogOut, 2)
             return 2
         
         newUser = User.User(breakDown[1],breakDown[2])
         self.User_List.append(newUser)
-        self.serverResponse(conn, addr, ClientFlags.LogOut, 1)
+        self.serverResponse(conn, ClientFlags.LogOut, 1)
         return 1
-               
+    
+    def serverAddSub(self,conn, dataString):
+        breakDown = dataString.split(self.delimiter)
+        userMatches = [x for x in self.User_List if x.username == breakDown[2]]
+        if not userMatches:
+            self.serverResponse(conn, ClientFlags.Sub, -1)
+        else:
+            users = [x for x in self.User_List if x.username == breakDown[1]]
+            for u in users:
+                u.userSub(breakDown[2])
+            for u in userMatches:
+                u.followers.append(breakDown[1])
+            self.serverResponse(conn, ClientFlags.Sub, 1)
+            
+    def serverUnsub(self,conn, dataString):
+        breakDown = dataString.split(self.delimiter)
+        userMatches = [x for x in self.User_List if x.username == breakDown[2]]
+        if not userMatches:
+            self.serverResponse(conn, ClientFlags.Sub, -1)
+        else:
+            users = [x for x in self.User_List if x.username == breakDown[1]]
+            for u in users:
+                if breakDown[1] in u.followers:
+                    u.followers.remove(breakDown[2])
+            for u in userMatches:
+                u.userUnsub(breakDown[2])
+            self.serverResponse(conn, ClientFlags.Sub, 1)
+    
+    def serverPost(self,conn, dataString):
+        breakDown = dataString.split(self.delimiter)
+        newMessage = Message.Message(breakDown[1], breakDown[2])
+        newMessage.status = Message.MessageStatus.read
         
+        tags = breakDown[3].split('#')
+        newMessage.messageAddHashtags(tags)
+        
+        receivers = breakDown[4].split(':')
+        newMessage.messageAddReceivers(receivers)
+        
+        usr = self.serverFindUser(breakDown[1])
+        if usr is None:
+            return
+        else:
+            usr.userPostMessage(newMessage)
+            
+        newMessage.status = Message.MessageStatus.unread
+        if not newMessage.receivers:
+            for f in usr.followers:
+                follow = self.serverFindUser(f)
+                if follow is None:
+                    continue
+                else:
+                    follow.userReceivedMessage(newMessage)
+        else:
+            for r in newMessage.receivers:
+                rcv = self.serverFindUser(r)
+                if rcv is None:
+                    continue
+                else:
+                    rcv.userReceivedMessage(newMessage)
+     
+    def serverProcessData(self, conn, data):
+        breakDown = data.split(self.delimiter)
+        if breakDown[0] == ClientFlags.CreateUser:
+            self.serverCreateUser(conn, data)
+        elif breakDown[0] == ClientFlags.LogIn:
+            self.serverLogIn(conn, data) 
+        elif breakDown[0] == ClientFlags.LogOut:
+            self.serverLogOut(conn, data)     
+        elif breakDown[0] == ClientFlags.Post:
+            self.serverPost(conn, data)
+        elif breakDown[0] == ClientFlags.Sub:
+            self.serverAddSub(conn, data)
+        elif breakDown[0] == ClientFlags.Unsub:
+            self.serverUnSub(conn,data)
+        elif breakDown[0] == ClientFlags.Sync:
+            pass
+        else:
+            return -1
+        return 0
+       
     def RunServer(self):
         while(1):
-            readable, writeable, errored = select.select(self.Read_List, [], [])
+            readable, writeable, errored = select.select(self.Read_List, self.Write_List, [])
             for r in readable:
                 if r is self.sock:
                     conn, addr = self.sock.accept()
+                    conn.setblocking(0)
                     self.Read_List.append(conn)
+                    self.serverAddConnection(conn, addr)
+                    self.message_queues[conn] = Queue.Queue()
                 else:
                     data = r.recv(1024)
-                    
+                    if data:
+                        self.serverProcessData(r, data)
+                    #Close Connection Cause might need to remove 
+                    else:
+                        self.serverCloseConnection(r)
+                        
+            for w in writeable:
+                try:
+                    next_msg = self.message_queues[w].get_nowait()
+                except Queue.Empty:
+                    self.Write_List.remove(w)
+                else:
+                    w.send(next_msg)
+            
+            for e in errored:
+                self.serverCloseConnection(e)
         

@@ -9,11 +9,18 @@ class MessageStatus:
 
 class Message(object):
 
-    def __init__(self, params):
-        self.poster_id = -1
+    def __init__(self, user = '', msg = ''):
+        self.poster = ''
         self.text = ''
-        self.hashtags = []
-        
         self.status = MessageStatus.unread
-        self.receivers = []
         
+        self.hashtags = []
+        self.receivers = []
+    
+    def messageAddHashtags(self, *tags):
+        for t in tags:
+            self.hashtags.append(t)
+            
+    def messageAddReceivers(self, *receiver):
+        for r in receiver:
+            self.receivers.append(r)
