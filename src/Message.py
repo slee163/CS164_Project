@@ -24,3 +24,9 @@ class Message(object):
     def messageAddReceivers(self, *receiver):
         for r in receiver:
             self.receivers.append(r)
+            
+    def messageStringFormat(self, delimeter = '};{', hashDelimeter = '::'):
+        msgStr = self.poster + delimeter + self.text + delimeter
+        for h in self.hashtags:
+            msgStr += h + hashDelimeter
+        return msgStr

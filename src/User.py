@@ -19,6 +19,7 @@ class User(object):
         self.address = ''
         
         self.subscriptions = []
+        self.hashsubs = []
         self.followers = []
     
     def userPostMessage(self, msg):
@@ -28,13 +29,38 @@ class User(object):
         self.received_messages.append(msg)
         
     def userSub(self, name):
-        if name in self.subscriptions:
-            pass
+        if name[0] != '#':
+            if name in self.subscriptions:
+                pass
+            else:
+                self.subscriptions.append(name)
         else:
-            self.subscriptions.append(name)
+            if name in self.hashsubs:
+                pass
+            else:
+                self.hashsubs.append(name)
         
     def userUnsub(self, name):
-        if name not in self.subscriptions:
+        if name[0] != '#':
+            if name not in self.subscriptions:
+                pass
+            else:
+                self.subscriptions.remove(name)
+        else:
+            if name not in self.hashsubs:
+                pass
+            else:
+                self.hashsubs.remove(name)
+            
+    def userFollow(self, name):
+        if name in self.followers:
             pass
         else:
-            self.subscriptions.remove(name)
+            self.followers.append(name)
+    
+    def userUnfollow(self,name):
+        if name not in self.followers:
+            pass
+        else:
+            self.followers.remove(name)
+
