@@ -4,6 +4,7 @@ Created on May 22, 2015
 @author: Spencer Lee
 '''
 
+from Connection_Flags import *
 import Message
 import User
 import socket
@@ -29,24 +30,22 @@ def serverInit(host, port):
     
     return sock
 
-class ClientFlags:
-    CreateUser, LogIn, LogOut, Post, Sub, UnSub,  Sync, Quit = range(7)
-    
-class ServerFlags:
-    LogResp, SubResp, Post = range(3)
+#Enumerations 
 
-class TwitServer(object):
+class Server(object):
 
 
     def __init__(self, HOST, PORT):
         self.sock = serverInit(HOST, PORT)
         self.sock.listen(15)
         self.User_List = []
-        #self.Connections = []
-        self.Read_List = [self.sock]
+        self.messages = []
+        
+        self.Read_List = [sys.stdin, self.sock]
         self.Write_List = []
         self.message_queues = {}
         self.delimiter = '};{'
+        self.altDelimeter = '::'
         
     def serverFindUser(self, user):
         userMatches = [x for x in self.User_List if x.username == user]
@@ -80,12 +79,12 @@ class TwitServer(object):
             self.Connections.append(connTuple)
             
         
-    def serverResponse(self, conn, context, response):
+    def serverResponse(self, conn, context, user, response):
         reply = ''
-        if context == ClientFlags.LogIn or context == ClientFlags.LogOut or context == ClientFlags.CreateUser:
-            reply = str(ServerFlags.LogResp) + self.delimiter + str(response)
+        if context == ClientFlags.Login:
+            reply = str(ServerFlags.LogResp) + self.delimiter + user + str(response)
             
-        elif context == ClientFlags.Sub or context == ClientFlags.UnSub:
+        elif context == ClientFlags.AddSub:
             reply = str(ServerFlags.SubResp) + self.delimiter + str(response)
             
         elif context == ClientFlags.Post:
@@ -107,8 +106,8 @@ class TwitServer(object):
         breakDown = logInString.split(self.delimiter)
         userMatches = [x for x in self.User_List if x.username == breakDown[1]]
         if not userMatches:
-            self.serverResponse(conn, ClientFlags.LogIn, 2)
-            return 2
+            self.serverResponse(conn, ClientFlags.LogIn, breakDown[1], -1)
+            return
         for m in userMatches:
             if breakDown[2] == m.password:
                 m.connection = conn
@@ -119,10 +118,10 @@ class TwitServer(object):
                     self.Connections.remove(c)
                     self.Connections.append(connTuple)
                 '''
-                self.serverResponse(conn, ClientFlags.LogIn, 1)
-                return 1
-        self.serverResponse(conn, ClientFlags.LogIn, 3)
-        return 3
+                self.serverResponse(conn, ClientFlags.LogIn, breakDown[1], len(m.offlineMessages))
+                return
+        self.serverResponse(conn, ClientFlags.LogIn,breakDown[1], -1)
+        return
     
     def serverLogOut(self, conn, logOutString):
         breakDown = logOutString.split(self.delimiter)
@@ -138,10 +137,9 @@ class TwitServer(object):
         userMatches = [x for x in self.User_List if x.username == breakDown[1]]
         for m in userMatches:
                 m.connection = None
-                self.serverResponse(conn, ClientFlags.LogOut, 1)
-                return 1
-        return -1
-                
+
+        return
+                        
     def serverCreateUser(self, conn, createUserString):
         breakDown = createUserString.split(self.delimiter)
         userMatches= [x for x in self.User_List if x.username == breakDown[1]]
@@ -197,7 +195,6 @@ class TwitServer(object):
     def serverPost(self,conn, dataString):
         breakDown = dataString.split(self.delimiter)
         newMessage = Message.Message(breakDown[1], breakDown[2])
-        newMessage.status = Message.MessageStatus.read
         
         tags = breakDown[3].split('::')
         newMessage.messageAddHashtags(tags)
@@ -213,37 +210,63 @@ class TwitServer(object):
             usr.userPostMessage(newMessage)
         '''   
         usr = [x for x in self.User_List if x.username == breakDown[1]][0]
-        usr.userPostMessage(newMessage)
+        self.messages.append(newMessage)
             
-        newMessage.status = Message.MessageStatus.unread
         if not newMessage.receivers:
             for f in usr.followers:
                 follow = [x for x in self.User_List if x.username == f][0]
                 if follow is None:
                     continue
                 else:
-                    follow.userReceivedMessage(newMessage)
+                    if follow.connection is None:
+                        follow.offlineMessages.append(newMessage)
+                    else:
+                        msgStr = (str(ServerFlags.NewMsg) + follow.username +
+                                  newMessage.messageStringFormat(self.delimiter, self.altDelimeter, False))
+                        self.message_queues[follow.connection].put(msgStr)
+                        if follow.connection not in self.Write_List:
+                            self.Write_List.append(follow.connection)    
                     
             for h in newMessage.hashtags:
                 for u in self.User_List:
                     if h in u.hashsubs and u.username not in usr.followers:
-                        u.userReceivedMessage(newMessage)
-                        
+                        if u.connection is None:                   
+                            u.offlineMessages.append(newMessage)
+                    else:
+                        msgStr = (str(ServerFlags.NewMsg) + u.username +
+                                  newMessage.messageStringFormat(self.delimiter, self.altDelimeter, False))
+                        self.message_queues[u.connection].put(msgStr)
+                        if u.connection not in self.Write_List:
+                            self.Write_List.append(conn)                           
         else:
             for r in newMessage.receivers:
                 rcv = [x for x in self.User_List if x.username == r][0]
                 if rcv is None:
                     continue
                 else:
-                    rcv.userReceivedMessage(newMessage)
+                    if rcv.connection is None:
+                        rcv.offlineMessages.append(newMessage)
+                    else:
+                        msgStr = (str(ServerFlags.NewMsg) + rcv.username +
+                                  newMessage.messageStringFormat(self.delimiter, self.altDelimeter, False))
+                        self.message_queues[rcv.connection].put(msgStr)
+                        if rcv.connection not in self.Write_List:
+                            self.Write_List.append(rcv.connection)  
+                    
+    def serverSyncData(self,conn, dataString):
+        breakDown = dataString.split(self.delimiter)
+        usr = [x for x in self.User_List if x.username == breakDown[1]][0]
+        
+        namePkt = str(DataFlags.Uname) + self.delimiter + usr.username
+        
+        
      
     def serverProcessData(self, conn, data):
         breakDown = data.split(self.delimiter)
-        if breakDown[0] == ClientFlags.CreateUser:
-            self.serverCreateUser(conn, data)
-        elif breakDown[0] == ClientFlags.LogIn:
+        
+        if breakDown[0] == ClientFlags.Login:
             self.serverLogIn(conn, data) 
-        elif breakDown[0] == ClientFlags.LogOut:
+        elif breakDown[0] == ClientFlags.Logout:
             self.serverLogOut(conn, data)     
         elif breakDown[0] == ClientFlags.Post:
             self.serverPost(conn, data)
@@ -259,6 +282,7 @@ class TwitServer(object):
        
     def RunServer(self):
         while(1):
+            '''
             for u in self.User_List:
                 if u.connection is None:
                     continue
@@ -266,10 +290,15 @@ class TwitServer(object):
                     for m in u.received_messages:
                         if m.status == Message.MessageStatus.unread:
                             message_pkt = str(ServerFlags.Post) + m.messageStringFormat(self.delimiter,'::')
+                            
+                            self.message_queues[m.connection].put(message_pkt)
+                            if m.connection not in self.Write_List:
+                                self.Write_List.append(m.connection)
+            '''                
             readable, writeable, errored = select.select(self.Read_List, self.Write_List, [])
             for r in readable:
                 if r is self.sock:
-                    conn, addr = self.sock.accept()
+                    conn = self.sock.accept()[0]
                     conn.setblocking(0)
                     self.Read_List.append(conn)
                     #self.serverAddConnection(conn, addr)
@@ -287,7 +316,7 @@ class TwitServer(object):
                 try:
                     next_msg = self.message_queues[w].get_nowait()
                 except Queue.Empty:
-                    self.Write_List.remove(w)
+                    continue
                 else:
                     w.send(next_msg)
             

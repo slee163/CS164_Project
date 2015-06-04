@@ -12,8 +12,8 @@ class User(object):
     def __init__(self, name = '', pw = '123'):
         self.username = name
         self.password = pw
-        self.posted_messages = []
-        self.received_messages = []
+
+        self.offlineMessages = []
         
         self.connection = None
         self.address = ''
@@ -22,11 +22,9 @@ class User(object):
         self.hashsubs = []
         self.followers = []
     
-    def userPostMessage(self, msg):
-        self.posted_messages.append(msg)
     
-    def userReceivedMessage(self, msg):
-        self.received_messages.append(msg)
+    def userReceivedOfflineMessage(self, msg):
+        self.offlineMessages.append(msg)
         
     def userSub(self, name):
         if name[0] != '#':
