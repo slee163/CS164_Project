@@ -8,4 +8,4 @@ class ClientFlags:
     Login, Logout, GetMsg, GetSubs, GetFollowers, AddSub, DelSub, Post, HSearch, Quit = range(10)
     
 class ServerFlags:
-    LogResp, SubResp, Sub, Follow, Post, OldMsg, HashMsg, NewMsg, EndTrans = range(9)
+    Login, SubResp, Sub, Follow, OldMsg, HashMsg, NewMsg, EndTrans = range(9)

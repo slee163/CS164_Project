@@ -17,6 +17,7 @@ class User(object):
         
         self.connection = None
         self.address = ''
+        self.address = ''
         
         self.subscriptions = []
         self.hashsubs = []

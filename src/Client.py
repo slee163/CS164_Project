@@ -10,6 +10,7 @@ import socket
 import sys
 import select
 import os
+import getpass
 from __builtin__ import False
 
 
@@ -17,7 +18,8 @@ from __builtin__ import False
 clearwin = lambda: os.system('cls')
 clearunix = lambda: os.system('clear')
 
-clear = clearwin
+#clear = clearwin
+clear = clearunix
 
 def clientInit(host, port):
     try:
@@ -52,17 +54,20 @@ class Client(object):
         self.user = ''
         self.unread_messages = 0
         self.sock = clientInit(host, port)
+        #self.sock = None
         self.login_status = False
         
         self.delimiter = '};{'
         self.alt_delimeter = '::'
         
         self.read_list = [sys.stdin, self.sock]
+        #self.read_list = [sys.stdin]
         self.write_list = []
         
         self.live_messages = []
+        self.live_msg_count = 0
         
-        self.menu_state = Client_State.Main
+        self.menu_state = Client_State.LogIn
         
     def assembleQuit(self):
         quitStr = str(ClientFlags.Quit) + self.delimiter
@@ -112,17 +117,6 @@ class Client(object):
         logOutStr = (str(ClientFlags.Logout) + self.delimiter +
                      self.user)
         return logOutStr
-    
-    def clientAssembleMsg(self, dataStr):
-        breakDown = dataStr.split(self.delimiter)
-        hashtags = breakDown[3].split(self.alt_delimeter)
-        print breakDown[1] + ':'
-        print breakDown[2]
-        hashStr = ''
-        for h in hashtags:
-            hashStr += h + ' '
-        print hashStr
-        print'--------------------------------------------------------------------------------'
         
     
     def clientLogIn(self):
@@ -136,8 +130,8 @@ class Client(object):
                 #self.sock.close()
                 sys.exit()
                 
-            password = raw_input('Enter Password')
-            
+            #password = raw_input('Enter Password')
+            password = getpass.getpass('Enter Password: ')
             loginStr = self.assembleLogInString(username, password)
             
             self.sock.send(loginStr)
@@ -227,9 +221,16 @@ class Client(object):
         readable = select.select(self.read_list, [], [], 0)[0]
         for r in readable:
             if r is self.sock:
-                pass
+                dataStr = self.sock.recv(1024)
+                breakDown = dataStr.split(self.delimiter)
+                if breakDown[0] == ServerFlags.NewMsg:
+                    newMsg = Message.Message.fromString(dataStr,'};{','::')
+                    self.live_messages.append(newMsg)  
+                    return '-1'
+                else:
+                    pass
             elif r is sys.stdin:
-                inpt = r.getline()
+                inpt = sys.stdin.readline()
                 return inpt
             
         return ''
@@ -240,8 +241,8 @@ class Client(object):
         inpt = ''
         while validInput == False:
             while inpt == '':
-                #inpt = self.clientCheckInputs()
-                inpt = raw_input(':')
+                inpt = self.clientCheckInputs()
+                #inpt = raw_input(':')
             inInt = int(inpt)
             if lower <= inInt <= upper or inInt == alt:
                 validInput = True
@@ -250,7 +251,7 @@ class Client(object):
         return inpt
     
     def clientMainMenu(self):
-        print'--------------------------------------------------------------------------------'
+        print '---------------------------------------------------'
         for m in self.live_messages:
             m.printMsg()
             
@@ -264,6 +265,8 @@ class Client(object):
         print '9: Logout'
         
         inInt = int(self.validateMenuSelection(1, 5, 9))
+        if inInt == -1:
+            return
 
         if inInt < 9:
             self.menu_state = inInt
@@ -328,6 +331,7 @@ class Client(object):
         clear()
         if inInt == 0:
             self.menu_state = Client_State.Main
+            return 
         elif inInt == 1:
             print 'Enter user or hashtag to subscribe to'
             print 'leave blank to return to main menu: '
@@ -366,6 +370,8 @@ class Client(object):
         return
         
         self.menu_state = Client_State.Main
+        
+        
     def clientPostMenu(self):
         print 'Enter a message followed by Enter, leave blank to return to main menu'
         

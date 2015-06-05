@@ -44,16 +44,17 @@ class Message(object):
         for h in self.hashtags:
             hashStr += h + ' '
         print hashStr
-        print'--------------------------------------------------------------------------------'
+        print'----------------------------------------------------'
 
             
     def messageStringFormat(self, delimeter = '};{', hashDelimeter = '::', fromClient = False):
         msgStr = self.poster + delimeter + self.text + delimeter
         for h in self.hashtags:
             msgStr += h + hashDelimeter
-            
+        
+        msgStr += delimeter    
         if fromClient == True:
-            msgStr += delimeter
+            
             for r in self.receivers:
                 msgStr += r + hashDelimeter
             
