@@ -4,9 +4,6 @@ Created on May 22, 2015
 @author: Spencer Lee
 '''
 
-class MessageStatus:
-    unread, read = range(2)
-
 class Message(object):
 
     def __init__(self, user = '', msg = ''):
@@ -18,27 +15,31 @@ class Message(object):
         
     def messageAddHashtags(self, tags):
         for t in tags:
-            self.hashtags.append(str(t))
+            if t != '':
+                self.hashtags.append(str(t))
             
     def messageAddReceivers(self, receiver):
         for r in receiver:
-            self.receivers.append(str(r))  
+            if r != '':
+                self.receivers.append(str(r))  
               
     @classmethod
-    def fromString(cls, dataString, delimeter = '};{', hashDelimeter = '::'):
+    def fromString(cls, dataString, delimeter = '};{', hashDelimeter = '::', fromClient = False):
         breakDown = dataString.split(delimeter)
-        
-        usr = breakDown[1]
-        msg = breakDown[2]
+        offset = 0
+        if fromClient == True:
+            offset = 1
+        usr = breakDown[1 + offset]
+        msg = breakDown[2 + offset]
         m = cls(usr,msg)
         
-        tags = breakDown[3].split(hashDelimeter)
+        tags = breakDown[3 + offset].split(hashDelimeter)
         m.messageAddHashtags(tags)
         
         return m
     
     def printMsg(self):
-        print self.user + ':'
+        print self.poster + ':'
         print self.text
         hashStr = ''
         for h in self.hashtags:

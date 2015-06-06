@@ -5,7 +5,7 @@ Created on May 30, 2015
 '''
 
 class ClientFlags:
-    Login, Logout, GetMsg, GetSubs, GetFollowers, AddSub, DelSub, Post, HSearch, Quit = range(10)
+    Login, Logout, GetMsg, GetSubs, GetFollowers, AddSub, DelSub, Post, HSearch, Quit, MSize = range(11)
     
 class ServerFlags:
-    Login, SubResp, Sub, Follow, OldMsg, HashMsg, NewMsg, EndTrans = range(9)
+    Login, SubResp, Sub, Follow, OldMsg, HashMsg, NewMsg, EndTrans, MSize = range(9)

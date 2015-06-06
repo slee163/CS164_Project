@@ -11,8 +11,7 @@ import sys
 import select
 import os
 import getpass
-from __builtin__ import False
-
+import struct
 
 
 clearwin = lambda: os.system('cls')
@@ -54,14 +53,13 @@ class Client(object):
         self.user = ''
         self.unread_messages = 0
         self.sock = clientInit(host, port)
-        #self.sock = None
+        self.sock.settimeout(3.0)
         self.login_status = False
         
         self.delimiter = '};{'
         self.alt_delimeter = '::'
         
         self.read_list = [sys.stdin, self.sock]
-        #self.read_list = [sys.stdin]
         self.write_list = []
         
         self.live_messages = []
@@ -74,15 +72,15 @@ class Client(object):
         return quitStr
         
     def assembleLogInString(self, username, password):
-        loginStr =  (str(ClientFlags.LogIn) + self.delimiter +
+        loginStr =  (str(ClientFlags.Login) + self.delimiter +
                      username + self.delimiter + password)
         return loginStr
     
     def assembleReqMsgStr(self, subs):
         reqMsgStr = (str(ClientFlags.GetMsg) + self.delimiter +
                      self.user)
-        if subs:
-            reqMsgStr += self.delimiter
+        reqMsgStr += self.delimiter
+        if subs:    
             for s in subs:
                 reqMsgStr += s + self.alt_delimeter
                 
@@ -125,12 +123,10 @@ class Client(object):
             username = raw_input('Enter Username: ')
             if username == 'QUIT':
                 dataStr = self.assembleQuit()
-                print dataStr
-                
-                #self.sock.close()
+                self.sock.send(dataStr)
+                self.sock.close()
                 sys.exit()
                 
-            #password = raw_input('Enter Password')
             password = getpass.getpass('Enter Password: ')
             loginStr = self.assembleLogInString(username, password)
             
@@ -138,9 +134,11 @@ class Client(object):
             
             serverValid = False
             while serverValid == False:
-                sockData = self.sock.recv(1024)
+                lenStr = self.sock.recv(4)
+                replyLen = struct.unpack('I',lenStr)[0]
+                sockData = self.sock.recv(replyLen)
                 breakDown = sockData.split(self.delimiter)
-                if breakDown[0] == ServerFlags.LogResp:
+                if int(breakDown[0]) == ServerFlags.Login:
                     serverValid = True
             
             if int(breakDown[2]) >= 0:
@@ -150,6 +148,8 @@ class Client(object):
                 
                 self.menu_state = Client_State.Main
                 return
+            else:
+                print 'Invalid Username or Password'
             
     def clientLogOut(self):
         dataStr = self.assembleLogOut()
@@ -165,66 +165,89 @@ class Client(object):
         return
         
     def clientRecvMsg(self, msgType):
+        print '---------------------------------------------------'
         moreMessages = True
         while moreMessages == True:
-            dataStr = self.sock.recv(1024)
-            breakDown = dataStr.split(self.delimiter)
-            if breakDown[0] == ServerFlags.EndTrans:
-                moreMessages = False
-                continue
-            if breakDown[0] != msgType:
-                if breakDown[0] == ServerFlags.NewMsg:
-                    newMsg = Message.Message.fromString(dataStr,'};{','::')
-                    self.live_messages.append(newMsg)
-                else:
+            try:
+                lenStr = self.sock.recv(4)
+                replyLen = struct.unpack('I',lenStr)[0]
+                dataStr = self.sock.recv(replyLen)
+                
+                breakDown = dataStr.split(self.delimiter)
+                if int(breakDown[0]) == ServerFlags.EndTrans:
+                    moreMessages = False
                     continue
-            newMsg = Message.Message.fromString(dataStr,'};{','::')
-            self.clientPrintMsg(newMsg)
+                if int(breakDown[0]) != msgType:
+                    if breakDown[0] == ServerFlags.NewMsg:
+                        newMsg = Message.Message.fromString(dataStr,'};{','::', True)
+                        self.live_messages.append(newMsg)
+                        continue
+                    else:
+                        continue
+                newMsg = Message.Message.fromString(dataStr,'};{','::', True)
+                newMsg.printMsg()
+            except socket.timeout:
+                break
             
     def clientRecvSubs(self):
         moreSubs = True
         subList = []
         while moreSubs == True:
-            dataStr = self.sock.recv(1024)
-            breakDown = dataStr.split(self.delimiter)
-            if breakDown[0]== ServerFlags.EndTrans:
-                moreSubs = False
-            if breakDown[0] != ServerFlags.Sub and breakDown[0] != ServerFlags.Follow:
-                if breakDown[0] == ServerFlags.NewMsg:
-                    newMsg = Message.Message.fromString(dataStr,'};{','::')
-                    self.live_messages.append(newMsg)
-                else:
-                    continue
-            sub = breakDown[2]
-            if sub:
-                subList.append(sub)
+            try:
+                lenStr = self.sock.recv(4)
+                replyLen = struct.unpack('I',lenStr)[0]
+                dataStr = self.sock.recv(replyLen)
+                breakDown = dataStr.split(self.delimiter)
+                if int(breakDown[0]) == ServerFlags.EndTrans:
+                    moreSubs = False
+                if int(breakDown[0]) != ServerFlags.Sub and int(breakDown[0]) != ServerFlags.Follow:
+                    if breakDown[0] == ServerFlags.NewMsg:
+                        newMsg = Message.Message.fromString(dataStr,'};{','::')
+                        self.live_messages.append(newMsg)
+                    else:
+                        continue
+                sub = breakDown[2]
+                if sub:
+                    subList.append(sub)
+            except socket.timeout:
+                break
                 
         return subList
     
     def clientRecvSubResp(self):
         recing = True
         while recing == True:
-            dataStr = self.sock.recv(1024)
+            try:
+                lenStr = self.sock.recv(4)
+                replyLen = struct.unpack('I',lenStr)[0]
+                dataStr = self.sock.recv(replyLen)
+            except socket.timeout:
+                print 'Error Timeout'
+                break
+                
             breakDown = dataStr.split(self.delimiter)
-            if breakDown[0] == ServerFlags.SubResp:
+            if int(breakDown[0]) == ServerFlags.SubResp:
                 if int(breakDown[2]) == 1:
                     print 'Successfully Subscribed'
                     return
-                elif int(breakDown[2] == -1):
+                elif int(breakDown[2]) == -1:
                     print 'Error user not found'
                     return   
-            elif breakDown[0] == ServerFlags.NewMsg:
-                newMsg = Message.Message.fromString(dataStr,'};{','::')
+            elif int(breakDown[0]) == ServerFlags.NewMsg:
+                newMsg = Message.Message.fromString(dataStr,'};{','::',True)
                 self.live_messages.append(newMsg)  
             
     def clientCheckInputs(self):
         readable = select.select(self.read_list, [], [], 0)[0]
         for r in readable:
             if r is self.sock:
-                dataStr = self.sock.recv(1024)
+                lenStr = self.sock.recv(4)
+                replyLen = struct.unpack('I',lenStr)[0]
+                dataStr = self.sock.recv(replyLen)
                 breakDown = dataStr.split(self.delimiter)
-                if breakDown[0] == ServerFlags.NewMsg:
-                    newMsg = Message.Message.fromString(dataStr,'};{','::')
+
+                if int(breakDown[0]) == ServerFlags.NewMsg:
+                    newMsg = Message.Message.fromString(dataStr,'};{','::',True)
                     self.live_messages.append(newMsg)  
                     return '-1'
                 else:
@@ -240,14 +263,22 @@ class Client(object):
         validInput = False
         inpt = ''
         while validInput == False:
+            inpt = ''
+            inInt = -101
             while inpt == '':
                 inpt = self.clientCheckInputs()
-                #inpt = raw_input(':')
-            inInt = int(inpt)
+                inpt = inpt.rstrip('\n')
+            try:
+                inInt = int(inpt)
+            except ValueError:
+                print 'Invalid Selection'
+                continue
             if lower <= inInt <= upper or inInt == alt:
                 validInput = True
-            else:
-                print 'Invalid Selection'
+            elif inInt == -1:
+                return '-1'
+                
+
         return inpt
     
     def clientMainMenu(self):
@@ -286,7 +317,7 @@ class Client(object):
             self.menu_state = Client_State.Main
             return
         elif inInt == 1:
-            sendStr = self.assembleReqMsgStr()
+            sendStr = self.assembleReqMsgStr([])
             
             self.sock.send(sendStr)
             self.clientRecvMsg(ServerFlags.OldMsg)
@@ -312,7 +343,7 @@ class Client(object):
             for i in cSubs:
                 lSubs.append(subList[int(i)])
             sendStr = self.assembleReqMsgStr(lSubs)
-            
+
             self.sock.send(sendStr)
             self.clientRecvMsg(ServerFlags.OldMsg)
            
@@ -339,7 +370,8 @@ class Client(object):
             if not target:
                 self.menu_state = Client_State.Main
                 return
-            sendStr = self.assembleReqMsgStr(target)
+            sendStr = self.assembleAddSub(target)
+            print sendStr
             self.sock.send(sendStr)
             self.clientRecvSubResp()
         
@@ -403,7 +435,8 @@ class Client(object):
                 rcvsplit = rcvers.split(' ')
                 newMsg.messageAddReceivers(rcvsplit)
                 
-            sendStr = str(ClientFlags.Post) + newMsg.messageStringFormat(self.delimiter, self.alt_delimeter, True)
+            sendStr = (str(ClientFlags.Post) + self.delimiter + 
+                       newMsg.messageStringFormat(self.delimiter, self.alt_delimeter, True))
             
             self.sock.send(sendStr)
             
@@ -439,6 +472,8 @@ class Client(object):
         for s in follList:
             print str(c) + ': ' + s
             c += 1
+        if not follList:
+            print 'No Followers'
         raw_input('Press Enter to return to main menu')
         self.menu_state = Client_State.Main
 
@@ -454,7 +489,7 @@ class Client(object):
             self.menus[self.menu_state](self)
             
 def main():
-    tClient = Client('localhost',8681)
+    tClient = Client('localhost',8684)
     tClient.clientMainLoop()
 
 

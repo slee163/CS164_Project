@@ -11,6 +11,13 @@ import socket
 import select
 import sys
 import Queue
+import os
+import struct
+
+clearwin = lambda: os.system('cls')
+clearunix = lambda: os.system('clear')
+
+clear = clearunix
 
 def serverInit(host, port):
     try:
@@ -52,28 +59,16 @@ class Server(object):
     def updateMAB(self):
         self.messages_at_boot = len(self.messages)
         
-    def serverFindUser(self, user):
-        userMatches = [x for x in self.User_List if x.username == user]
-        if not userMatches:
-            return None
-        else:
-            return userMatches[0]
-        
     def serverCloseConnection(self, conn):
-        '''
-        connMatches = [x for x in self.Connections if x[0] == conn]
-        for m in connMatches:
-            self.Connections.remove(m)
-        '''
         if conn in self.Write_List:
             self.Write_List.remove(conn)
             
         if conn in self.Read_List:
             self.Read_List.remove(conn)
-            conn.close() 
-            
+             
         del self.message_queues[conn]
-        
+        conn.close()
+
     def serverAddConnection(self, conn, addr):
         connMatches = [x for x in self.Connections if x[0] == conn]
         connTuple = (conn, addr, '')
@@ -101,15 +96,19 @@ class Server(object):
         elif ServerFlags.OldMsg <= flag <= ServerFlags.NewMsg:
             reply = (str(flag) + self.delimiter + 
                      user + self.delimiter +
-                     args[0].messageStringFormat(self.delimiter, self.alt_delimeter, False))
+                     args[0].messageStringFormat(self.delimiter, self.altDelimeter, False))
                     
         elif flag == ServerFlags.EndTrans:
-            reply (str(flag) + self.delimiter +
+            reply = (str(flag) + self.delimiter +
                    user)     
             
         else:
             return
         
+        replyLen = len(reply)
+        replyLenStr = struct.pack('I', replyLen)
+        
+        self.message_queues[conn].put(replyLenStr)
         self.message_queues[conn].put(reply)
         if conn not in self.Write_List:
             self.Write_List.append(conn)
@@ -121,38 +120,26 @@ class Server(object):
         breakDown = logInString.split(self.delimiter)
         userMatches = [x for x in self.User_List if x.username == breakDown[1]]
         if not userMatches:
-            self.serverResponse(conn, ClientFlags.LogIn, breakDown[1], -1)
+            self.serverCreateResponse(conn, ServerFlags.Login, breakDown[1], -1)
             return
         for m in userMatches:
             if breakDown[2] == m.password:
                 m.connection = conn
-                '''
-                connMatches = [x for x in self.Connections if x[0] == conn]
-                for c in connMatches:
-                    connTuple = (conn,c[1],m.username)
-                    self.Connections.remove(c)
-                    self.Connections.append(connTuple)
-                '''
-                self.serverResponse(conn, ClientFlags.LogIn, breakDown[1], len(m.offlineMessages))
+
+                self.serverCreateResponse(conn, ServerFlags.Login, breakDown[1], len(m.offlineMessages))
+                print 'User: ' + breakDown[1] + ' has logged in'
                 return
-        self.serverResponse(conn, ClientFlags.LogIn,breakDown[1], -1)
+        self.serverCreateResponse(conn, ClientFlags.Login,breakDown[1], -1)
         return
     
     def serverLogOut(self, conn, logOutString):
         breakDown = logOutString.split(self.delimiter)
-        '''
-        addrMatches = [x for x in self.Connections if x[0] == conn and breakDown[1] == x[2]]
-        for m in addrMatches:
-                self.serverResponse(conn, ClientFlags.LogOut, 1)
-                connTuple = (conn,m[1],'')
-                self.Connections.remove(m)
-                self.Connections.append(connTuple)
-                return 1
-        '''
+
         userMatches = [x for x in self.User_List if x.username == breakDown[1]]
         for m in userMatches:
                 m.connection = None
-
+                del m.offlineMessages[:]
+        print 'User: ' + breakDown[1] + ' has logged out'
         return
         
     def serverGetMsg(self, conn, dataString):
@@ -161,16 +148,26 @@ class Server(object):
         if int(breakDown[0]) == ClientFlags.GetMsg:
             msgList = user.offlineMessages
             if breakDown[2]:
-                for s in breakDown[2]:
-                    msgMatches = [x for x in msgList if x.poster == s]
-                    for m in msgMatches:
-                        self.serverCreateResponse(conn, ServerFlags.OldMsg, breakDown[1],m)
+                bd2 = breakDown[2].split(self.altDelimeter)
+                for s in bd2:
+                    if not s:
+                        continue
+                    if s[0] != '#':
+                        msgMatches = [x for x in msgList if x.poster == s]
+                        for m in msgMatches:
+                            self.serverCreateResponse(conn, ServerFlags.OldMsg, breakDown[1],m)
+                    else:
+                        for m in msgList:
+                            if s in m.hashtags:
+                                self.serverCreateResponse(conn, ServerFlags.OldMsg, breakDown[1], m)
             else:
                 for m in msgList:
                     self.serverCreateResponse(conn, ServerFlags.OldMsg, breakDown[1],m)
         
         elif int(breakDown[0]) == ClientFlags.HSearch:
             for m in reversed(self.messages):
+                if m.receivers:
+                    continue 
                 if breakDown[2] in m.hashtags:
                     self.serverCreateResponse(conn, ServerFlags.HashMsg, breakDown[1],m)
                     
@@ -179,11 +176,16 @@ class Server(object):
     def serverGetSub(self, conn, dataString):
         breakDown = dataString.split(self.delimiter)
         user = [x for x in self.User_List if x.username == breakDown[1]][0]
-        for s in user.subscriptions:
-            self.serverCreateResponse(conn, ServerFlags.SubResp, breakDown[1], s)
-        for s in user.hashsubs:
-            self.serverCreateResponse(conn, ServerFlags.SubResp, breakDown[1], s)
-            
+        
+        if int(breakDown[0]) == ClientFlags.GetSubs:
+            for s in user.subscriptions:
+                self.serverCreateResponse(conn, ServerFlags.Sub, breakDown[1], s)
+            for s in user.hashsubs:
+                self.serverCreateResponse(conn, ServerFlags.Sub, breakDown[1], s)
+        elif int(breakDown[0]) == ClientFlags.GetFollowers:
+            for f in user.followers:
+                self.serverCreateResponse(conn, ServerFlags.Follow, breakDown[1], f)
+
         self.serverCreateResponse(conn, ServerFlags.EndTrans, breakDown[1])
          
     def serverAddSub(self,conn, dataString):
@@ -191,19 +193,19 @@ class Server(object):
         if breakDown[2][0] != '#':
             userMatches = [x for x in self.User_List if x.username == breakDown[2]]
             if not userMatches:
-                self.serverResponse(conn, ClientFlags.Sub, -1)
+                self.serverCreateResponse(conn, ServerFlags.SubResp, breakDown[1], -1)
             else:
                 users = [x for x in self.User_List if x.username == breakDown[1]]
                 for u in users:
                     u.userSub(breakDown[2])
                 for u in userMatches:
                     u.userFollow(breakDown[1])
-                self.serverResponse(conn, ClientFlags.Sub, 1)
+                self.serverCreateResponse(conn, ServerFlags.SubResp, breakDown[1], 1)
         else:
             users = [x for x in self.User_List if x.username == breakDown[1]]
             for u in users:
                 u.userSub(breakDown[2])
-            self.serverResponse(conn, ClientFlags.Sub, 1)
+            self.serverCreateResponse(conn, ServerFlags.SubResp, breakDown[1], 1)
             
     def serverUnsub(self,conn, dataString):
         breakDown = dataString.split(self.delimiter)
@@ -227,19 +229,12 @@ class Server(object):
         breakDown = dataString.split(self.delimiter)
         newMessage = Message.Message(breakDown[1], breakDown[2])
         
-        tags = breakDown[3].split('::')
+        tags = breakDown[3].split(self.altDelimeter)
         newMessage.messageAddHashtags(tags)
         
-        receivers = breakDown[4].split('::')
+        receivers = breakDown[4].split(self.altDelimeter)
         newMessage.messageAddReceivers(receivers)
         
-        '''
-        usr = self.serverFindUser(breakDown[1])
-        if usr is None:
-            return
-        else:
-            usr.userPostMessage(newMessage)
-        '''   
         usr = [x for x in self.User_List if x.username == breakDown[1]][0]
         self.messages.append(newMessage)
             
@@ -252,32 +247,18 @@ class Server(object):
                     if follow.connection is None:
                         follow.offlineMessages.append(newMessage)
                     else:
-                        '''
-                        msgStr = (str(ServerFlags.NewMsg) + follow.username +
-                                  newMessage.messageStringFormat(self.delimiter, self.altDelimeter, False))
-                        self.message_queues[follow.connection].put(msgStr)                        
-                        if follow.connection not in self.Write_List:
-                            self.Write_List.append(follow.connection)    
-                        '''
-                        self.serverCreateResponse(conn, ServerFlags.NewMsg, follow.username, newMessage)
 
-                            
+                        self.serverCreateResponse(follow.connection, ServerFlags.NewMsg, follow.username, newMessage)
+           
             for h in newMessage.hashtags:
                 for u in self.User_List:
-                    if h in u.hashsubs and u.username not in usr.followers:
+                    if h in u.hashsubs and u.username not in usr.followers and u.username != breakDown[1]:
                         if u.connection is None:                   
                             u.offlineMessages.append(newMessage)
                             
                         else:
-                            self.serverCreateResponse(conn, ServerFlags.NewMsg, follow.username, newMessage)
-                        '''
-                        msgStr = (str(ServerFlags.NewMsg) + u.username +
-                                  newMessage.messageStringFormat(self.delimiter, self.altDelimeter, False))
-                        self.message_queues[u.connection].put(msgStr)
-                        
-                        if u.connection not in self.Write_List:
-                            self.Write_List.append(conn)
-                        '''                           
+                            self.serverCreateResponse(u.connection, ServerFlags.NewMsg, follow.username, newMessage)
+           
         else:
             for r in newMessage.receivers:
                 rcv = [x for x in self.User_List if x.username == r][0]
@@ -287,13 +268,6 @@ class Server(object):
                     if rcv.connection is None:
                         rcv.offlineMessages.append(newMessage)
                     else:
-                        '''
-                        msgStr = (str(ServerFlags.NewMsg) + rcv.username +
-                                  newMessage.messageStringFormat(self.delimiter, self.altDelimeter, False))
-                        self.message_queues[rcv.connection].put(msgStr)
-                        if rcv.connection not in self.Write_List:
-                            self.Write_List.append(rcv.connection)  
-                        '''
                         self.serverCreateResponse(conn, ServerFlags.NewMsg, follow.username, newMessage)
         
     serverResponses = [serverLogIn, serverLogOut, serverGetMsg,
@@ -351,52 +325,45 @@ class Server(object):
             count = self.serverAdminMessagecount()
             print 'New messages since server activation: ' + str(count)
         elif command == 'usercount':
-            count = self.serverAdminusercount()
+            count = self.serverAdminUsercount()
             print 'Logged on Users: ' + str(count)
         elif command == 'storedcount':
             count = self.serverAdminStoredcount()
-            print 'Stored Messages' + str(count)
+            print 'Stored Messages: ' + str(count)
         elif command == 'newuser':
             self.serverAdminNewuser()
+        elif command == 'QUIT':
+            self.serverAdminQuit()
         else:
-            print 'Invalid Admin Command'
+            print 'Invalid Admin Command: ' + command
         
         return
               
        
     def RunServer(self):
+        print 'Server Running'
         while(1):
-            '''
-            for u in self.User_List:
-                if u.connection is None:
-                    continue
-                else:
-                    for m in u.received_messages:
-                        if m.status == Message.MessageStatus.unread:
-                            message_pkt = str(ServerFlags.Post) + m.messageStringFormat(self.delimiter,'::')
-                            
-                            self.message_queues[m.connection].put(message_pkt)
-                            if m.connection not in self.Write_List:
-                                self.Write_List.append(m.connection)
-            '''      
-                      
-            readable, writeable, errored = select.select(self.Read_List, self.Write_List, [])
+            readable = select.select(self.Read_List, self.Write_List, [])[0]
             for r in readable:
-                if r is self.sock:
+                if r is sys.stdin:
+                    cmd = sys.stdin.readline()
+                    cmd = cmd.rstrip('\n')
+                    self.serverAdminCmd(cmd)
+
+                elif r is self.sock:
                     conn = self.sock.accept()[0]
                     conn.setblocking(0)
                     self.Read_List.append(conn)
-                    #self.serverAddConnection(conn, addr)
                     self.message_queues[conn] = Queue.Queue()
                 else:
                     data = r.recv(1024)
                     if data:
                         self.serverProcessData(r, data)
-                    #Close Connection Cause might need to remove 
                     else:
                         pass
-                        #self.serverCloseConnection(r)
-                        
+
+            
+            _, writeable, errored = select.select(self.Read_List, self.Write_List, [])            
             for w in writeable:
                 try:
                     next_msg = self.message_queues[w].get_nowait()
@@ -407,7 +374,7 @@ class Server(object):
             
             for e in errored:
                 self.serverCloseConnection(e)
-                
+            
                 
 def setupUsers(tServer):
     user1 = User.User('alice', '1234')
@@ -438,7 +405,11 @@ def setupUsers(tServer):
     user4.userFollow('alice')   
     user4.userFollow('chris')
     
-    #user5 = User.User('eli', 'yuiop')  
+    tServer.User_List.append(user1)
+    tServer.User_List.append(user2)
+    tServer.User_List.append(user3)
+    tServer.User_List.append(user4)
+
     
 def setupMessages(tServer):
     msg1 = Message.Message('alice', 'This is a test')
@@ -456,11 +427,11 @@ def setupMessages(tServer):
     msg5 = Message.Message('dennis', 'One of Everything')
     msg5.messageAddHashtags(['#alpha', '#bravo', '#charlie'])
     
-    msgStrs = [str(ClientFlags.Post) + msg1.messageStringFormat(tServer.delimiter, tServer.alt_delimeter, True),
-               str(ClientFlags.Post) + msg2.messageStringFormat(tServer.delimiter, tServer.alt_delimeter, True),
-               str(ClientFlags.Post) + msg3.messageStringFormat(tServer.delimiter, tServer.alt_delimeter, True),
-               str(ClientFlags.Post) + msg4.messageStringFormat(tServer.delimiter, tServer.alt_delimeter, True),
-               str(ClientFlags.Post) + msg5.messageStringFormat(tServer.delimiter, tServer.alt_delimeter, True)]
+    msgStrs = [str(ClientFlags.Post) + tServer.delimiter + msg1.messageStringFormat(tServer.delimiter, tServer.altDelimeter, True),
+               str(ClientFlags.Post) + tServer.delimiter + msg2.messageStringFormat(tServer.delimiter, tServer.altDelimeter, True),
+               str(ClientFlags.Post) + tServer.delimiter + msg3.messageStringFormat(tServer.delimiter, tServer.altDelimeter, True),
+               str(ClientFlags.Post) + tServer.delimiter + msg4.messageStringFormat(tServer.delimiter, tServer.altDelimeter, True),
+               str(ClientFlags.Post) + tServer.delimiter + msg5.messageStringFormat(tServer.delimiter, tServer.altDelimeter, True)]
     
     for m in msgStrs:
         tServer.serverPost(None,m)
@@ -473,9 +444,12 @@ def setupTestBench(tServer):
    
                    
 def main():
-    tServer = Server('localhost', 8681)
+    clear()
+    tServer = Server('localhost', 8684)
     setupTestBench(tServer)
     tServer.RunServer()
     
     
 
+if __name__ == "__main__":
+    main()
